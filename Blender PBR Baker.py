@@ -1,8 +1,8 @@
 bl_info = {
     "name": "PBR Texture Baker",
-    "author": "Godwin Jimoh(Astronet)",
-    "version": (1, 1, 2),
-    "blender": (4, 4, 3),
+    "author": "Godwin Jimoh",
+    "version": (1, 1, 3),
+    "blender": (5, 0, 0),
     "location": "View3D > Sidebar > Bake Tab",
     "description": "Bake multiple maps across selected objects using shared UVs",
     "category": "Object",
@@ -73,7 +73,7 @@ def setup_emission(material, socket_name, fallback):
     nodes = material.node_tree.nodes
     links = material.node_tree.links
 
-    principled = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    principled = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None) #User is expected to have one and only one Principled shader in their material
     output = next((n for n in nodes if n.type == "OUTPUT_MATERIAL"), None)
     if not principled or not output:
         return None
@@ -199,8 +199,9 @@ class BatchBakeProps(bpy.types.PropertyGroup):
     )
     output_path: bpy.props.StringProperty(
         name="Output Path",
-        default="//../FIN/TEXTURES/",
-        subtype='DIR_PATH'
+        default="//textures/",
+        subtype='FILE_PATH',
+        options={'PATH_SUPPORTS_BLEND_RELATIVE'}
     )
 
 class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
@@ -219,6 +220,7 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
     current_image = None
     draw_handle = None
     is_baking = False
+    _original_settings = {}
 
     def modal(self, context, event):
         if event.type == 'ESC' or not self.is_baking:
@@ -247,6 +249,14 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
             self.report({'WARNING'}, "No objects selected or no maps to bake.")
             return {'CANCELLED'}
 
+        # Capture the current render settings so we can restore them after baking
+        self._original_settings = {
+            "engine": context.scene.render.engine,
+            "bake_type": context.scene.cycles.bake_type,
+            "use_clear": context.scene.render.bake.use_clear,
+            "target": context.scene.render.bake.target,
+        }
+
         self.map_index = 0
         self.object_index = 0
         self.start_time = time.time()
@@ -255,6 +265,7 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
 
         # A slightly longer timer gives the UI a moment to refresh between bakes
         self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
+        
         self.draw_handle = bpy.types.SpaceView3D.draw_handler_add(self.draw_callback, (context,), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
         
@@ -298,7 +309,15 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
 
         # If all objects for the current map are done, save the image and move to the next map
         if self.object_index >= len(self._objects):
-            out_path = bpy.path.abspath(props.output_path)
+            if props.output_path.startswith("//") and not bpy.data.filepath:
+                out_path = bpy.path.abspath("/tmp/textures/")
+                self.report(
+                    {'WARNING'}, 
+                    'Blend file not saved. Texture output redirected to /tmp/textures/'
+                )
+            else:
+                out_path = bpy.path.abspath(props.output_path)
+                
             os.makedirs(out_path, exist_ok=True)
             self.current_image.filepath_raw = os.path.join(out_path, self.current_image.name + ".png")
             self.current_image.file_format = 'PNG'
@@ -320,6 +339,14 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
 
     def cleanup(self, context):
         self.is_baking = False
+        
+        # Restore the original render settings from the captured state
+        if hasattr(self, '_original_settings') and self._original_settings:
+            context.scene.render.engine = self._original_settings["engine"]
+            context.scene.cycles.bake_type = self._original_settings["bake_type"]
+            context.scene.render.bake.use_clear = self._original_settings["use_clear"]
+            context.scene.render.bake.target = self._original_settings["target"]
+
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
         if self.draw_handle:
@@ -369,15 +396,14 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
         else:
             lines.append("Finishing up...")
 
-        # --- Draw Text Centered ---
-        region_width = context.region.width
+        # --- Draw Text Left Aligned ---
         
         # Calculate y position for the first (top) line, starting from the bottom up
         start_y = (len(lines) * line_height) + (40 * res_scale)
 
         for i, text in enumerate(lines):
-            text_width, _ = blf.dimensions(font_id, text)
-            x_pos = (region_width - text_width) / 2
+            # Fixed margin from the left (40 pixels scaled by UI scale)
+            x_pos = 40 * res_scale
             y_pos = start_y - (i * line_height)
             
             blf.position(font_id, x_pos, y_pos, 0)
