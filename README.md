@@ -10,7 +10,7 @@ A Blender add-on for baking full PBR texture sets (Base Color, Roughness, Metall
 - ✅ Bake **Base Color, Roughness, Metallic, Specular, Alpha, Normal**
 - ✅ Supports **multiple selected objects**, each with **multiple materials**
 - ✅ Uses the **Emission baking trick** to extract any socket from Principled BSDF
-- ✅ Bakes all maps into **shared unified UV** per object — ideal for texture atlas workflows
+- ✅ Bakes all maps into **shared unified UV** for all selected object — ideal for texture atlas workflows
 - ✅ Stores images in correct **color space**: sRGB or Non-Color as required
 - ✅ Automatic cleanup of baking nodes and temporary images
 - ✅ Live **progress overlay** inside the 3D viewport
@@ -44,7 +44,7 @@ The **Normal map** is baked using Blender’s native `NORMAL` bake type.
 
 ## 🧪 Tested On
 
-- Blender 4.4+
+- Blender 5.0+
 - Multi-material, multi-object scenes
 - Unified UV layouts
 - 2K / 4K /custom resolution PNG output
@@ -67,7 +67,7 @@ Naming can be customized via:
 
 1. Download or clone this repo
 2. Open Blender → Preferences → Add-ons → Install
-3. Select `blender_pbr_texture_baker.py`
+3. Select `Blender PBR Baker.py`
 4. Enable the addon
 5. Go to **3D Viewport → Sidebar → Bake Tab**
 
