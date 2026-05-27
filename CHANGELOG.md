@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.1.5 - 27-05-2026
+- Changed Normal map baking from Blender's native `NORMAL` bake type to the add-on's Emission bake workflow to avoid Blender 5.1 crashes
+- Added support for baking normal textures from standard `Image Texture -> Normal Map -> Principled BSDF` node chains
+- Normal baking now falls back to a flat normal map when no compatible normal texture source is found
+
+## v1.1.4 - 27-05-2026
+- Minimum supported Blender version updated from **5.0.0** to **5.1.0**
+- Added Blender Extension packaging metadata with `blender_manifest.toml` and an `__init__.py` wrapper
+- Added fallback lookup for renamed Principled BSDF sockets, including Specular / Specular IOR Level
+- Guarded Cycles bake setting capture and restoration for Blender 5.1 compatibility
+- Corrected Alpha and Normal output images to use Non-Color color space
+
 ## v1.1.3 - 14-01-2026
 - Minimum supported Blender version updated from **4.4.0** to **5.0.0**
 - Original render and bake settings are now captured before baking and restored after completion or cancellation preventing permanent changes to the user’s render engine and bake configuration

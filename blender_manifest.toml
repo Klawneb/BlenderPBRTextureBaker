@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "pbr_texture_baker"
+version = "1.1.5"
+name = "PBR Texture Baker"
+tagline = "Bake PBR texture maps from selected objects"
+maintainer = "Godwin Jimoh"
+type = "add-on"
+
+blender_version_min = "5.1.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+[permissions]
+files = "Save baked texture maps to the selected output folder"

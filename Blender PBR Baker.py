@@ -1,8 +1,8 @@
 bl_info = {
     "name": "PBR Texture Baker",
     "author": "Godwin Jimoh",
-    "version": (1, 1, 3),
-    "blender": (5, 0, 0),
+    "version": (1, 1, 5),
+    "blender": (5, 1, 0),
     "location": "View3D > Sidebar > Bake Tab",
     "description": "Bake multiple maps across selected objects using shared UVs",
     "category": "Object",
@@ -12,48 +12,74 @@ import bpy
 import os
 import time
 import blf
-import gpu
 
 
 # Define bake map configuration
 BAKE_MAPS = {
     "Base Color": {
-        "socket": "Base Color",
+        "socket": ("Base Color",),
         "bake_type": "EMIT",
         "color_space": "sRGB",
         "fallback": "color"
     },
     "Roughness": {
-        "socket": "Roughness",
+        "socket": ("Roughness",),
         "bake_type": "EMIT",
         "color_space": "Non-Color",
         "fallback": "scalar"
     },
     "Metallic": {
-        "socket": "Metallic",
+        "socket": ("Metallic",),
         "bake_type": "EMIT",
         "color_space": "Non-Color",
         "fallback": "scalar"
     },
     "Specular": {
-        "socket": "Specular IOR Level",
+        "socket": ("Specular IOR Level", "Specular"),
         "bake_type": "EMIT",
         "color_space": "Non-Color",
         "fallback": "scalar"
     },
     "Alpha": {
-        "socket": "Alpha",
+        "socket": ("Alpha",),
         "bake_type": "EMIT",
-        "color_space": "sRGB",
+        "color_space": "Non-Color",
         "fallback": "scalar"
     },
     "Normal": {
-        "socket": "Normal",
-        "bake_type": "NORMAL",
-        "color_space": "sRGB",
+        "socket": ("Normal",),
+        "bake_type": "EMIT",
+        "color_space": "Non-Color",
         "fallback": "flat_normal"
     }
 }
+
+def get_input_socket(node, socket_names):
+    if isinstance(socket_names, str):
+        socket_names = (socket_names,)
+    for socket_name in socket_names:
+        socket = node.inputs.get(socket_name)
+        if socket:
+            return socket
+    return None
+
+def get_normal_color_source(normal_socket):
+    if not normal_socket or not normal_socket.is_linked:
+        return None
+
+    normal_source = normal_socket.links[0].from_socket
+    normal_node = normal_source.node
+
+    if normal_node.type == "NORMAL_MAP":
+        color_input = normal_node.inputs.get("Color")
+        if color_input and color_input.is_linked:
+            return color_input.links[0].from_socket
+        return None
+
+    if normal_source.name == "Color":
+        return normal_source
+
+    return None
 
 def create_image(name, width, height, color_space):
     image = bpy.data.images.new(name, width=width, height=height)
@@ -69,7 +95,7 @@ def insert_image_node(material, image):
     return tex_node
 
 
-def setup_emission(material, socket_name, fallback):
+def setup_emission(material, socket_names, fallback):
     nodes = material.node_tree.nodes
     links = material.node_tree.links
 
@@ -82,7 +108,7 @@ def setup_emission(material, socket_name, fallback):
     if output.inputs['Surface'].is_linked:
         original_surface_link = output.inputs['Surface'].links[0].from_socket
 
-    input_socket = principled.inputs.get(socket_name)
+    input_socket = get_input_socket(principled, socket_names)
 
     original_input_link = None
     if input_socket and input_socket.is_linked:
@@ -90,7 +116,14 @@ def setup_emission(material, socket_name, fallback):
 
     emission = nodes.new("ShaderNodeEmission")
 
-    if input_socket and input_socket.is_linked:
+    if fallback == "flat_normal":
+        normal_color_source = get_normal_color_source(input_socket)
+        if normal_color_source:
+            links.new(normal_color_source, emission.inputs["Color"])
+        else:
+            emission.inputs["Color"].default_value = (0.5, 0.5, 1.0, 1.0)
+        emission.inputs["Strength"].default_value = 1.0
+    elif input_socket and input_socket.is_linked:
         links.new(original_input_link, emission.inputs["Color"])
         emission.inputs["Strength"].default_value = 1.0
     else:
@@ -106,7 +139,8 @@ def setup_emission(material, socket_name, fallback):
             emission.inputs["Color"].default_value = (0.5, 0.5, 1.0, 1.0)
             emission.inputs["Strength"].default_value = 1.0
 
-    links.new(emission.outputs["Emission"], output.inputs["Surface"])
+    emission_output = emission.outputs.get("Emission") or emission.outputs[0]
+    links.new(emission_output, output.inputs["Surface"])
 
     return {
         "emission": emission,
@@ -152,9 +186,11 @@ def bake_map_for_object(obj, map_config, image, bake_type):
     if all_materials_cleanup_info:
         scene = bpy.context.scene
         scene.render.engine = 'CYCLES'
-        scene.cycles.bake_type = bake_type
+        if hasattr(scene, "cycles") and hasattr(scene.cycles, "bake_type"):
+            scene.cycles.bake_type = bake_type
         scene.render.bake.use_clear = False
-        scene.render.bake.target = 'IMAGE_TEXTURES'
+        if hasattr(scene.render.bake, "target"):
+            scene.render.bake.target = 'IMAGE_TEXTURES'
         bpy.ops.object.bake(type=bake_type)
 
     # --- CLEANUP PHASE ---
@@ -221,6 +257,7 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
     draw_handle = None
     is_baking = False
     _original_settings = {}
+    _saved_images = set()
 
     def modal(self, context, event):
         if event.type == 'ESC' or not self.is_baking:
@@ -232,7 +269,12 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
                 self.finish(context)
                 return {'FINISHED'}
             
-            self.execute_step(context)
+            try:
+                self.execute_step(context)
+            except Exception as exc:
+                self.report({'ERROR'}, f"Bake failed: {exc}")
+                self.cancel(context)
+                return {'CANCELLED'}
             # After a step, always redraw to update the UI
             if context.area:
                 context.area.tag_redraw()
@@ -252,9 +294,9 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
         # Capture the current render settings so we can restore them after baking
         self._original_settings = {
             "engine": context.scene.render.engine,
-            "bake_type": context.scene.cycles.bake_type,
+            "bake_type": context.scene.cycles.bake_type if hasattr(context.scene, "cycles") and hasattr(context.scene.cycles, "bake_type") else None,
             "use_clear": context.scene.render.bake.use_clear,
-            "target": context.scene.render.bake.target,
+            "target": context.scene.render.bake.target if hasattr(context.scene.render.bake, "target") else None,
         }
 
         self.map_index = 0
@@ -262,11 +304,12 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
         self.start_time = time.time()
         self.is_baking = True
         self._images_to_remove = []
+        self._saved_images = set()
 
         # A slightly longer timer gives the UI a moment to refresh between bakes
         self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
         
-        self.draw_handle = bpy.types.SpaceView3D.draw_handler_add(self.draw_callback, (context,), 'WINDOW', 'POST_PIXEL')
+        self.draw_handle = bpy.types.SpaceView3D.draw_handler_add(self.draw_callback, (), 'WINDOW', 'POST_PIXEL')
         context.window_manager.modal_handler_add(self)
         
         # Trigger an initial redraw to show the UI immediately
@@ -322,50 +365,60 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
             self.current_image.filepath_raw = os.path.join(out_path, self.current_image.name + ".png")
             self.current_image.file_format = 'PNG'
             self.current_image.save()
+            self._saved_images.add(self.current_image.name)
             
             self.object_index = 0
             self.map_index += 1
 
     def finish(self, context):
-        self.cleanup(context)
+        self.cleanup(context, remove_unsaved_images=False)
         total_time = time.time() - self.start_time
         self.report({'INFO'}, f"Baking complete in {total_time:.2f} seconds.")
         context.workspace.status_text_set(f"Baking complete in {total_time:.2f} seconds.")
 
     def cancel(self, context):
-        self.cleanup(context)
+        self.cleanup(context, remove_unsaved_images=True)
         self.report({'INFO'}, "Baking cancelled.")
         context.workspace.status_text_set("Baking cancelled.")
 
-    def cleanup(self, context):
+    def cleanup(self, context, remove_unsaved_images):
         self.is_baking = False
         
         # Restore the original render settings from the captured state
         if hasattr(self, '_original_settings') and self._original_settings:
             context.scene.render.engine = self._original_settings["engine"]
-            context.scene.cycles.bake_type = self._original_settings["bake_type"]
+            if self._original_settings["bake_type"] is not None and hasattr(context.scene, "cycles") and hasattr(context.scene.cycles, "bake_type"):
+                context.scene.cycles.bake_type = self._original_settings["bake_type"]
             context.scene.render.bake.use_clear = self._original_settings["use_clear"]
-            context.scene.render.bake.target = self._original_settings["target"]
+            if self._original_settings["target"] is not None and hasattr(context.scene.render.bake, "target"):
+                context.scene.render.bake.target = self._original_settings["target"]
 
         if self._timer:
             context.window_manager.event_timer_remove(self._timer)
         if self.draw_handle:
             bpy.types.SpaceView3D.draw_handler_remove(self.draw_handle, 'WINDOW')
+            self.draw_handle = None
         for img in self._images_to_remove:
-            if img: bpy.data.images.remove(img, do_unlink=True)
+            if not img:
+                continue
+            if remove_unsaved_images and img.name not in self._saved_images:
+                bpy.data.images.remove(img, do_unlink=True)
+        self._images_to_remove = []
+        self.current_image = None
         
         # Final redraw to clear the baking text
         if context.area:
             context.area.tag_redraw()
 
-    def draw_callback(self, context):
+    def draw_callback(self):
         if not self.is_baking:
             return
 
-        # Ensure we are in a 3D View
-        if context.area.type != 'VIEW_3D':
+        context = bpy.context
+        if not context.area or context.area.type != 'VIEW_3D':
             return
 
+        # Ensure we are in a 3D View
         font_id = 0
         
         # --- UI Scaling and Font Setup ---
@@ -458,7 +511,8 @@ def register():
     bpy.types.Scene.bake_props = bpy.props.PointerProperty(type=BatchBakeProps)
 
 def unregister():
-    del bpy.types.Scene.bake_props
+    if hasattr(bpy.types.Scene, "bake_props"):
+        del bpy.types.Scene.bake_props
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
 

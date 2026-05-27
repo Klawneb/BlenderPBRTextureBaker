@@ -38,13 +38,15 @@ Here's how the add-on works:
 - Connects the target socket (e.g., Roughness) into Emission → bakes as `EMIT`
 - After baking, the image is saved and all material changes are **fully cleaned up**
 
-The **Normal map** is baked using Blender’s native `NORMAL` bake type.
+The **Normal map** is baked through the same Emission workflow by copying a
+standard `Image Texture → Normal Map → Principled BSDF` color source into the
+atlas. If no compatible normal texture chain is found, a flat normal is baked.
 
 ---
 
 ## 🧪 Tested On
 
-- Blender 5.0+
+- Blender 5.1+
 - Multi-material, multi-object scenes
 - Unified UV layouts
 - 2K / 4K /custom resolution PNG output
@@ -70,6 +72,9 @@ Naming can be customized via:
 3. Select `Blender PBR Baker.py`
 4. Enable the addon
 5. Go to **3D Viewport → Sidebar → Bake Tab**
+
+For Blender's Extension system, build or install the folder/zip that contains
+`__init__.py`, `Blender PBR Baker.py`, and `blender_manifest.toml`.
 
 
 
