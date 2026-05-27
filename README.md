@@ -11,6 +11,7 @@ A Blender add-on for baking full PBR texture sets (Base Color, Roughness, Metall
 - ✅ Supports **multiple selected objects**, each with **multiple materials**
 - ✅ Uses the **Emission baking trick** to extract any socket from Principled BSDF
 - ✅ Bakes all maps into **shared unified UV** for all selected object — ideal for texture atlas workflows
+- ✅ Lets you choose which UV map to bake to when selected objects have multiple UV maps
 - ✅ Stores images in correct **color space**: sRGB or Non-Color as required
 - ✅ Automatic cleanup of baking nodes and temporary images
 - ✅ Live **progress overlay** inside the 3D viewport
@@ -22,7 +23,7 @@ A Blender add-on for baking full PBR texture sets (Base Color, Roughness, Metall
 This addon is designed for **specific use cases**. Please note:
 
 - ❌ It only works with **shared UV islands across all objects**
-- ❌ Does **not** support multiple UV maps per material
+- ❌ Selected objects should use matching UV map names when baking a named UV map across multiple objects
 - ❌ Does **not** support UDIM tile baking
 - ❌ Requires objects to use **Principled BSDF**
 - ❌ Only supports **Cycles Render Engine** (Eevee is not supported for baking)
@@ -41,6 +42,11 @@ Here's how the add-on works:
 The **Normal map** is baked through the same Emission workflow by copying a
 standard `Image Texture → Normal Map → Principled BSDF` color source into the
 atlas. If no compatible normal texture chain is found, a flat normal is baked.
+
+The **UV Map** dropdown controls which UV layer is used for baking. `Active UV
+Map` keeps each object's current bake/render UV, while named UV maps temporarily
+set that UV active during baking and restore the previous object state
+afterward.
 
 ---
 

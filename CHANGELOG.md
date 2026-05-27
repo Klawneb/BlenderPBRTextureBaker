@@ -1,5 +1,11 @@
 # Changelog
 
+## v1.1.6 - 27-05-2026
+- Added a UV Map dropdown for choosing which selected-object UV layer is used for baking
+- Selected UV maps are temporarily set as active/render UVs during baking and restored afterward
+- Added a warning when a chosen UV map is missing on one or more selected objects
+- Material node and UV state cleanup now runs even if a per-object bake raises an error
+
 ## v1.1.5 - 27-05-2026
 - Changed Normal map baking from Blender's native `NORMAL` bake type to the add-on's Emission bake workflow to avoid Blender 5.1 crashes
 - Added support for baking normal textures from standard `Image Texture -> Normal Map -> Principled BSDF` node chains

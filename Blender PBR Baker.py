@@ -1,7 +1,7 @@
 bl_info = {
     "name": "PBR Texture Baker",
     "author": "Godwin Jimoh",
-    "version": (1, 1, 5),
+    "version": (1, 1, 6),
     "blender": (5, 1, 0),
     "location": "View3D > Sidebar > Bake Tab",
     "description": "Bake multiple maps across selected objects using shared UVs",
@@ -54,6 +54,8 @@ BAKE_MAPS = {
     }
 }
 
+UV_MAP_ENUM_CACHE = []
+
 def get_input_socket(node, socket_names):
     if isinstance(socket_names, str):
         socket_names = (socket_names,)
@@ -62,6 +64,70 @@ def get_input_socket(node, socket_names):
         if socket:
             return socket
     return None
+
+def get_uv_map_items(self, context):
+    global UV_MAP_ENUM_CACHE
+
+    items = [
+        ('ACTIVE', "Active UV Map", "Use each object's current active/render UV map")
+    ]
+    seen_uvs = set()
+    selected_objects = context.selected_objects if context else []
+
+    for obj in selected_objects:
+        if obj.type != 'MESH':
+            continue
+        for uv_layer in obj.data.uv_layers:
+            if uv_layer.name in seen_uvs:
+                continue
+            seen_uvs.add(uv_layer.name)
+            items.append((uv_layer.name, uv_layer.name, f"Bake using UV map '{uv_layer.name}'"))
+
+    UV_MAP_ENUM_CACHE = items
+    return UV_MAP_ENUM_CACHE
+
+def capture_uv_state(obj):
+    uv_layers = obj.data.uv_layers
+    if not uv_layers:
+        return None
+
+    active_index = uv_layers.active_index
+    active_render_index = next(
+        (index for index, uv_layer in enumerate(uv_layers) if uv_layer.active_render),
+        active_index
+    )
+
+    return {
+        "active_index": active_index,
+        "active_render_index": active_render_index
+    }
+
+def set_bake_uv_map(obj, uv_map_name):
+    state = capture_uv_state(obj)
+    if uv_map_name == 'ACTIVE' or not state:
+        return state, True
+
+    uv_layers = obj.data.uv_layers
+    uv_index = uv_layers.find(uv_map_name)
+    if uv_index < 0:
+        return state, False
+
+    uv_layers.active_index = uv_index
+    uv_layers[uv_index].active_render = True
+    return state, True
+
+def restore_uv_state(obj, state):
+    if not state:
+        return
+
+    uv_layers = obj.data.uv_layers
+    if not uv_layers:
+        return
+
+    if state["active_index"] < len(uv_layers):
+        uv_layers.active_index = state["active_index"]
+    if state["active_render_index"] < len(uv_layers):
+        uv_layers[state["active_render_index"]].active_render = True
 
 def get_normal_color_source(normal_socket):
     if not normal_socket or not normal_socket.is_linked:
@@ -149,66 +215,71 @@ def setup_emission(material, socket_names, fallback):
         "temporary": [emission]
     }
 
-def bake_map_for_object(obj, map_config, image, bake_type):
+def bake_map_for_object(obj, map_config, image, bake_type, uv_map_name='ACTIVE'):
     # Set object as active and select it exclusively
     bpy.context.view_layer.objects.active = obj
     bpy.ops.object.select_all(action='DESELECT')
     obj.select_set(True)
+    original_uv_state, uv_found = set_bake_uv_map(obj, uv_map_name)
 
     # Store cleanup information for all materials
     all_materials_cleanup_info = []
 
-    # --- SETUP PHASE ---
-    # Prepare all materials on the object for baking
-    for slot in obj.material_slots:
-        mat = slot.material
-        if not mat or not mat.use_nodes:
-            continue
+    try:
+        # --- SETUP PHASE ---
+        # Prepare all materials on the object for baking
+        for slot in obj.material_slots:
+            mat = slot.material
+            if not mat or not mat.use_nodes:
+                continue
 
-        # CRITICAL FIX: Deselect all nodes to prevent baking to an existing texture
-        for node in mat.node_tree.nodes:
-            node.select = False
+            # CRITICAL FIX: Deselect all nodes to prevent baking to an existing texture
+            for node in mat.node_tree.nodes:
+                node.select = False
 
-        # Insert the new image node that we will bake to.
-        image_node = insert_image_node(mat, image)
-        
-        cleanup_info = {"material": mat, "image_node": image_node, "temporary": []}
+            # Insert the new image node that we will bake to.
+            image_node = insert_image_node(mat, image)
+            
+            cleanup_info = {"material": mat, "image_node": image_node, "temporary": []}
 
-        if bake_type == "EMIT":
-            state = setup_emission(mat, map_config["socket"], map_config["fallback"])
-            if state:
-                cleanup_info.update(state)
-        
-        all_materials_cleanup_info.append(cleanup_info)
+            if bake_type == "EMIT":
+                state = setup_emission(mat, map_config["socket"], map_config["fallback"])
+                if state:
+                    cleanup_info.update(state)
+            
+            all_materials_cleanup_info.append(cleanup_info)
 
-    # --- BAKE PHASE ---
-    # With all materials prepared, perform the bake operation ONCE.
-    if all_materials_cleanup_info:
-        scene = bpy.context.scene
-        scene.render.engine = 'CYCLES'
-        if hasattr(scene, "cycles") and hasattr(scene.cycles, "bake_type"):
-            scene.cycles.bake_type = bake_type
-        scene.render.bake.use_clear = False
-        if hasattr(scene.render.bake, "target"):
-            scene.render.bake.target = 'IMAGE_TEXTURES'
-        bpy.ops.object.bake(type=bake_type)
+        # --- BAKE PHASE ---
+        # With all materials prepared, perform the bake operation ONCE.
+        if all_materials_cleanup_info:
+            scene = bpy.context.scene
+            scene.render.engine = 'CYCLES'
+            if hasattr(scene, "cycles") and hasattr(scene.cycles, "bake_type"):
+                scene.cycles.bake_type = bake_type
+            scene.render.bake.use_clear = False
+            if hasattr(scene.render.bake, "target"):
+                scene.render.bake.target = 'IMAGE_TEXTURES'
+            bpy.ops.object.bake(type=bake_type)
+    finally:
+        # --- CLEANUP PHASE ---
+        # Restore all materials to their original state
+        for cleanup in all_materials_cleanup_info:
+            mat = cleanup["material"]
+            links = mat.node_tree.links
 
-    # --- CLEANUP PHASE ---
-    # Restore all materials to their original state
-    for cleanup in all_materials_cleanup_info:
-        mat = cleanup["material"]
-        links = mat.node_tree.links
+            if cleanup.get("material_output") and cleanup.get("original_surface_link"):
+                output = cleanup["material_output"]
+                if output.inputs['Surface'].is_linked:
+                    links.remove(output.inputs['Surface'].links[0])
+                links.new(cleanup["original_surface_link"], output.inputs["Surface"])
 
-        if cleanup.get("material_output") and cleanup.get("original_surface_link"):
-            output = cleanup["material_output"]
-            if output.inputs['Surface'].is_linked:
-                links.remove(output.inputs['Surface'].links[0])
-            links.new(cleanup["original_surface_link"], output.inputs["Surface"])
+            for node in cleanup.get("temporary", []):
+                mat.node_tree.nodes.remove(node)
+            if cleanup.get("image_node"):
+                mat.node_tree.nodes.remove(cleanup["image_node"])
 
-        for node in cleanup.get("temporary", []):
-            mat.node_tree.nodes.remove(node)
-        if cleanup.get("image_node"):
-            mat.node_tree.nodes.remove(cleanup["image_node"])
+        restore_uv_state(obj, original_uv_state)
+    return uv_found
 
 
 class BatchBakeProps(bpy.types.PropertyGroup):
@@ -221,6 +292,11 @@ class BatchBakeProps(bpy.types.PropertyGroup):
 
     resolution_x: bpy.props.IntProperty(name="Width", default=4096, min=1)
     resolution_y: bpy.props.IntProperty(name="Height", default=4096, min=1)
+    uv_map: bpy.props.EnumProperty(
+        name="UV Map",
+        description="UV map to use for baking",
+        items=get_uv_map_items
+    )
 
     naming_convention: bpy.props.EnumProperty(
         name="File Naming",
@@ -258,6 +334,7 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
     is_baking = False
     _original_settings = {}
     _saved_images = set()
+    _missing_uv_objects = set()
 
     def modal(self, context, event):
         if event.type == 'ESC' or not self.is_baking:
@@ -305,6 +382,7 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
         self.is_baking = True
         self._images_to_remove = []
         self._saved_images = set()
+        self._missing_uv_objects = set()
 
         # A slightly longer timer gives the UI a moment to refresh between bakes
         self._timer = context.window_manager.event_timer_add(0.05, window=context.window)
@@ -345,7 +423,15 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
         map_key = self.map_keys[self.map_index]
         map_data = self._maps[map_key]
         
-        bake_map_for_object(obj, map_data, self.current_image, map_data["bake_type"])
+        uv_found = bake_map_for_object(
+            obj,
+            map_data,
+            self.current_image,
+            map_data["bake_type"],
+            props.uv_map
+        )
+        if not uv_found:
+            self._missing_uv_objects.add(obj.name)
 
         # Move to the next object
         self.object_index += 1
@@ -373,6 +459,12 @@ class OBJECT_OT_BakeAllMaps(bpy.types.Operator):
     def finish(self, context):
         self.cleanup(context, remove_unsaved_images=False)
         total_time = time.time() - self.start_time
+        if self._missing_uv_objects:
+            missing_names = ", ".join(sorted(self._missing_uv_objects))
+            self.report(
+                {'WARNING'},
+                f"Selected UV map was missing on: {missing_names}. Those objects used their active UV map."
+            )
         self.report({'INFO'}, f"Baking complete in {total_time:.2f} seconds.")
         context.workspace.status_text_set(f"Baking complete in {total_time:.2f} seconds.")
 
@@ -490,6 +582,10 @@ class OBJECT_PT_BakePanel(bpy.types.Panel):
         col.prop(props, "resolution_x", text="Width")
         col.prop(props, "resolution_y", text="Height")
         
+        layout.separator()
+        col = layout.column()
+        col.prop(props, "uv_map")
+
         layout.separator()
         col = layout.column()
         col.prop(props, "output_path")
